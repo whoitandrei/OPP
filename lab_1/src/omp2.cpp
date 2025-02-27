@@ -124,14 +124,15 @@ void findGoodSolve(const std::vector<std::vector<double>>& A, std::vector<double
 
 
 /* main func */
-int main() {
-    int size;
-    std::cout << "input N (size of matrix): " << std::endl;
-    std::cin >> size;
+int main(int argc, char** argv) {
+    
+    if (argc < 3) {
+        std::cerr << "Usage: " << argv[0] << " N T\n";
+        return 1;
+    }
 
-    int T;
-    std::cout << "input T (num of threads): ";
-    std::cin >> T;
+    int size = std::stoi(argv[1]);
+    int T = std::stoi(argv[2]);
 
     omp_set_num_threads(T);
 
@@ -148,7 +149,15 @@ int main() {
     double end = omp_get_wtime();
 
     std::cout << "\nTime: " << end - start << " seconds" << std::endl << std::endl;
-    std::cout << "Answer ( some nums from vector X):" << std::endl;
+    
+    double maxDifference = 0;
+    for (int i = 0; i < size; i++){
+        double difference = fabs(B[i] - X[i]);
+        if (difference > maxDifference)
+            maxDifference = difference;
+    }
+    std::cout << "max difference: " << maxDifference << std::endl;  
+
     std::cout << X[0] << " " << X[size/3] << " " << X[size/2] << " " << X[size-1] << std::endl;
 
     return 0;

@@ -77,25 +77,58 @@ bool isGoodSolve(const std::vector<double>& AX_B, const std::vector<double>& B, 
 }
 
 // (main loop of program)
-void findGoodSolve(const std::vector<std::vector<double>>& A, std::vector<double>* X, const std::vector<double>& B, int size) {
-    std::vector<double> AX_B = subVector(mulMatrixVector(A, *X, size), B, size);
+void findGoodSolve(const std::vector<std::vector<double>>& A, std::vector<double>& X, const std::vector<double>& B, int size) {
+        std::vector<double> AX_B(size);
+        double norm_AB , norm_B;
 
-    while (!isGoodSolve(AX_B, B, size)) {
-        mulConstVector(AX_B, TAU, size);
-        *X = subVector(*X, AX_B, size);
-        AX_B = subVector(mulMatrixVector(A, *X, size), B, size);
-    }
+        while (true) {
+            #pragma omp parallel for
+            for (int i = 0; i < size; ++i) {
+                double sum = 0.0;
+                for (int j = 0; j < size; ++j) {
+                    sum += A[i][j] * X[j];
+                }
+                AX_B[i] = sum - B[i];
+            }
+
+            norm_AB = 0.0;
+            norm_B = 0.0;
+
+
+            #pragma omp parallel for reduction(+:norm_AB)
+            for (int i = 0; i < size; ++i) {
+                norm_AB += AX_B[i] * AX_B[i];
+            }
+
+            #pragma omp parallel for reduction(+:norm_B)
+            for (int i = 0; i < size; ++i) {
+                norm_B += B[i] * B[i];
+            }
+
+            norm_AB = sqrt(norm_AB);
+            norm_B = sqrt(norm_B);
+
+            if (norm_AB / norm_B < EPS) break;
+
+            #pragma omp parallel for
+            for (int i = 0; i < size; ++i) {
+                X[i] -= TAU * AX_B[i];
+            }
+        }
+    
 }
 
-/* main func */
-int main() {
-    int size;
-    std::cout << "input N (size of matrix): ";
-    std::cin >> size;
 
-    int T;
-    std::cout << "input T (num of threads): ";
-    std::cin >> T;
+/* main func */
+int main(int argc, char** argv) {
+    
+    if (argc < 3) {
+        std::cerr << "Usage: " << argv[0] << " N T\n";
+        return 1;
+    }
+
+    int size = std::stoi(argv[1]);
+    int T = std::stoi(argv[2]);
 
     omp_set_num_threads(T);
 
@@ -108,21 +141,21 @@ int main() {
     initVectorX(&X, size);
 
     double start = omp_get_wtime();
-    findGoodSolve(A, &X, B, size);
+    findGoodSolve(A, X, B, size);
     double end = omp_get_wtime();
 
     std::cout << "\nTime: " << end - start << " seconds" << std::endl << std::endl;
-    std::cout << "Answer (some nums from vector X):" << std::endl;
+   
+    
+    double maxDifference = 0;
+    for (int i = 0; i < size; i++){
+        double difference = fabs(B[i] - X[i]);
+        if (difference > maxDifference)
+            maxDifference = difference;
+    }
+    std::cout << "max difference: " << maxDifference << std::endl;
+
     std::cout << X[0] << " " << X[size/3] << " " << X[size/2] << " " << X[size-1] << std::endl;
 
     return 0;
 }
-3000 4
-
-		10    50   100
-		
-static: 5.02 4.65 5.17
-dynamic: 5.94 7.26 6.04
-guided: 6.4 5.99 4.99
-auto: 5.1 6.9 5.39
-runtime: 6.06 4.67 4.68

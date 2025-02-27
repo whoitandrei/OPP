@@ -17,7 +17,7 @@ std::vector<double> mulMatrixVector(const std::vector<std::vector<double>>& matr
     }
     return result;
 }
-
+    
 std::vector<double> subVector(const std::vector<double>& vec1, const std::vector<double>& vec2, int size) {
     std::vector<double> result(size);
 
@@ -78,14 +78,15 @@ void findGoodSolve(const std::vector<std::vector<double>>& A, std::vector<double
         AX_B = subVector(mulMatrixVector(A, *X, size), B, size);
     }
 }
-
+    
 /* main func */
+int main(int argc, char** argv) {
+    if (argc < 2) {
+        std::cerr << "Usage: " << argv[0] << " N\n";
+        return 1;
+    }
 
-/* main func */
-int main() {
-    int size;
-    std::cout << "input N (size of matrix): " << std::endl;
-    std::cin >> size;
+    int size = std::stoi(argv[1]);
 
     std::vector<std::vector<double>> A(size, std::vector<double>(size));
     std::vector<double> X(size);
@@ -97,8 +98,13 @@ int main() {
 
     findGoodSolve(A, &X, B, size);
 
-    std::cout << "answer (vector X):" << std::endl;
-    std::cout << X[0] << " " << X[size/3] << " " << X[size/2] << " " << X[size-1] << "\n";
+    double maxDifference = 0.;
+    for (int i = 0; i < size; i++){
+        double difference = fabs(B[i] - X[i]);
+        if (difference > maxDifference)
+            maxDifference = difference;
+    }
+    std::cout << "max difference: " << maxDifference << std::endl;  
 
     return 0;
 }

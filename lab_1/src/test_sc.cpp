@@ -90,8 +90,13 @@
         double end = omp_get_wtime();
 
         std::cout << "\nTime: " << end - start << " seconds" << std::endl;
-        std::cout << "Answer (some nums from vector X):" << std::endl;
-        std::cout << X[0] << " " << X[size/3] << " " << X[size/2] << " " << X[size-1] << std::endl;
+        double maxDifference = 0;
+        for (int i = 0; i < size; i++){
+            double difference = fabs(B[i] - X[i]);
+            if (difference > maxDifference)
+                maxDifference = difference;
+        }
+        std::cout << "max difference: " << maxDifference << std::endl;  
 
         return 0;
     }
