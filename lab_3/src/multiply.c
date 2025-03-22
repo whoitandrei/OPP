@@ -183,7 +183,6 @@ int main(int argc, char** argv) {
     Matrix sub_a = {0}, sub_b = {0}, sub_c = {0};
     double start_time = 0;
 
-    // Initialize matrices
     int sub_rows = n1 / grid.dims[0];
     int sub_cols = n3 / grid.dims[1];
     
@@ -217,21 +216,14 @@ int main(int argc, char** argv) {
         start_time = MPI_Wtime();
     }
 
-    // Data distribution
     distribute_matrix_a(&grid, &a, &sub_a);
     distribute_matrix_b(&grid, &b, &sub_b);
 
-    // Local computation
     local_matrix_multiply(&sub_a, &sub_b, &sub_c);
 
-    // Result collection
-    if(grid.rank == 0) {
-        gather_results(&grid, &sub_c, &c);
-    } else {
-        gather_results(&grid, &sub_c, &c);
-    }
+    gather_results(&grid, &sub_c, &c);
+    
 
-    // Cleanup and output
     if(grid.rank == 0) {
         double end_time = MPI_Wtime();
         printf("Execution time: %.4f seconds\n", end_time - start_time);
