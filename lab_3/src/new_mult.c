@@ -2,11 +2,12 @@
 #include <stdlib.h>
 #include <mpi.h>
 #include <limits.h>
+#include <math.h>
 
 #define n1 2500
 #define n2 2500
 #define n3 2500
-
+#define BS 32 
 
 typedef struct {
     MPI_Comm grid;
@@ -116,62 +117,54 @@ void distribute_matrix_b(const GridInfo* grid, Matrix* b, Matrix* sub_b) {
 }
 
 void local_matrix_multiply(const Matrix* a, const Matrix* b, Matrix* c) {
-    for(int i = 0; i < a->rows; i++) {
-        for(int j = 0; j < b->cols; j++) {
-            c->data[i * c->cols + j] = 0;
-            for(int k = 0; k < a->cols; k++) {
-                c->data[i * c->cols + j] += 
-                    a->data[i * a->cols + k] * 
-                    b->data[k * b->cols + j];
-            }
-        }
+    int rows_a = a->rows;
+    int cols_a = a->cols;
+    int cols_b = b->cols;
+
+    for (int i = 0; i < rows_a * cols_b; i++) {
+        c->data[i] = 0.0;
     }
+
+    for (int i = 0; i < a->rows; i++) {
+		for (int k = 0; k < a->cols; k++) {
+			for (int j = 0; j < b->cols; j++) {
+				c->data[i * c->cols + j] += a->data[i * a->cols + k] * b->data[k * b->cols + j];
+			}
+		}
+	}
 }
 
 void gather_results(const GridInfo* grid, Matrix* sub_c, Matrix* c) {
     int sub_rows = n1 / grid->dims[0];
     int sub_cols = n3 / grid->dims[1];
-    
-    MPI_Datatype sub_c_type, sub_c_rows_type, sub_c_stride_type;
-    MPI_Type_contiguous(sub_rows * sub_cols, MPI_DOUBLE, &sub_c_type);
-    MPI_Type_commit(&sub_c_type);
-    
-    MPI_Type_contiguous(sub_rows * n3, MPI_DOUBLE, &sub_c_rows_type);
-    MPI_Type_commit(&sub_c_rows_type);
-    
-    MPI_Type_vector(sub_rows, sub_cols, n3, MPI_DOUBLE, &sub_c_stride_type);
-    MPI_Type_commit(&sub_c_stride_type);
+    int sendcount = sub_rows * sub_cols;
 
-    Matrix sub_c_rows = {0};
-    if(grid->coords[1] == 0) {
-        sub_c_rows.data = malloc(sub_rows * n3 * sizeof(double));
-        sub_c_rows.rows = sub_rows;
-        sub_c_rows.cols = n3;
+    int* recvcounts = NULL;
+    int* displs = NULL;
+
+    if (grid->rank == 0) {
+        recvcounts = malloc(grid->size * sizeof(int));
+        displs = malloc(grid->size * sizeof(int));
+
         
-        for(int i = 0; i < sub_rows; i++) {
-            for(int j = 0; j < sub_cols; j++) {
-                sub_c_rows.data[i * n3 + j] = sub_c->data[i * sub_cols + j];
-            }
+        for (int r = 0; r < grid->size; r++) {
+            int coords[2];
+            MPI_Cart_coords(grid->grid, r, 2, coords);
+            int row = coords[0];
+            int col = coords[1];
+            recvcounts[r] = sendcount;
+            displs[r] = (row * sub_rows * n3) + (col * sub_cols);
         }
-        
-        for(int i = 1; i < grid->dims[1]; i++) {
-            MPI_Recv(sub_c_rows.data + sub_cols * i, 1, sub_c_stride_type,
-                    i, 0, grid->row, MPI_STATUS_IGNORE);
-        }
-    } else {
-        MPI_Send(sub_c->data, 1, sub_c_type, 0, 0, grid->row);
     }
 
-    if(grid->coords[1] == 0) {
-        MPI_Gather(sub_c_rows.data, 1, sub_c_rows_type,
-                  c->data, 1, sub_c_rows_type,
-                  0, grid->col);
-    }
+    MPI_Gatherv(sub_c->data, sendcount, MPI_DOUBLE,
+                c->data, recvcounts, displs, MPI_DOUBLE,
+                0, grid->grid);
 
-    free(sub_c_rows.data);
-    MPI_Type_free(&sub_c_type);
-    MPI_Type_free(&sub_c_rows_type);
-    MPI_Type_free(&sub_c_stride_type);
+    if (grid->rank == 0) {
+        free(recvcounts);
+        free(displs);
+    }
 }
 
 int main(int argc, char** argv) {
@@ -225,17 +218,46 @@ int main(int argc, char** argv) {
     local_matrix_multiply(&sub_a, &sub_b, &sub_c);
 
     // Result collection
-    if(grid.rank == 0) {
-        gather_results(&grid, &sub_c, &c);
-    } else {
-        gather_results(&grid, &sub_c, &c);
-    }
+    gather_results(&grid, &sub_c, &c);
 
     // Cleanup and output
     if(grid.rank == 0) {
         double end_time = MPI_Wtime();
         printf("Execution time: %.4f seconds\n", end_time - start_time);
         // print_matrix(&c);
+
+        int step = 25; 
+        double max_diff = 0.0;
+        int max_i = -1, max_j = -1;
+
+        for (int i = 0; i < n1; i += step) {
+            for (int j = 0; j < n3; j += step) {
+
+                double theoretical_C = 0.0;
+                for (int k = 0; k < n2; k++) {
+                    double a_ik = (double)(i * n2 + k); // A[i][k]
+                    double b_kj = (double)(k * n3 + j); // B[k][j]
+                    theoretical_C += a_ik * b_kj;
+                }
+
+
+                double computed_C = c.data[i * n3 + j];
+
+
+                double diff = fabs(theoretical_C - computed_C);
+
+
+                if (diff > max_diff) {
+                    max_diff = diff;
+                    max_i = i;
+                    max_j = j;
+                }
+            }
+        }
+
+
+        printf("Maximum deviation: %.2e at (%d, %d)\n", max_diff, max_i, max_j);
+
         free(a.data);
         free(b.data);
         free(c.data);
