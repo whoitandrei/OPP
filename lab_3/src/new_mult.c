@@ -137,35 +137,53 @@ void local_matrix_multiply(const Matrix* a, const Matrix* b, Matrix* c) {
 void gather_results(const GridInfo* grid, Matrix* sub_c, Matrix* c) {
     int sub_rows = n1 / grid->dims[0];
     int sub_cols = n3 / grid->dims[1];
-    int sendcount = sub_rows * sub_cols;
+    int rank = grid->rank, size = grid->size;
 
-    int* recvcounts = NULL;
-    int* displs = NULL;
+    MPI_Datatype block_temp, block_type;
+    MPI_Type_vector(sub_rows,        
+                    sub_cols,        
+                    n3,              
+                    MPI_DOUBLE,      
+                    &block_temp);
+    
+    // сворачиваем без отступов (extent = sub_cols * sizeof(double) - сколько мы кладем, потому что displs правильно все расположит)
+    MPI_Type_create_resized(block_temp,
+                            0,                       
+                            sub_cols * sizeof(double), 
+                            &block_type);
+    MPI_Type_commit(&block_type);
+    MPI_Type_free(&block_temp);
 
-    if (grid->rank == 0) {
-        recvcounts = malloc(grid->size * sizeof(int));
-        displs = malloc(grid->size * sizeof(int));
+    int *recvcounts = NULL, *displs = NULL;
+    if (rank == 0) {
+        recvcounts = malloc(size * sizeof(int));
+        displs     = malloc(size * sizeof(int));
+        for (int r = 0; r < size; ++r) {
+            int crd[2];
+            MPI_Cart_coords(grid->grid, r, 2, crd);
 
-        
-        for (int r = 0; r < grid->size; r++) {
-            int coords[2];
-            MPI_Cart_coords(grid->grid, r, 2, coords);
-            int row = coords[0];
-            int col = coords[1];
-            recvcounts[r] = sendcount;
-            displs[r] = (row * sub_rows * n3) + (col * sub_cols);
+            recvcounts[r] = 1; // сколько элемнтов получим - в данном случае  1 элмент block_type
+            displs[r] = crd[0] * sub_rows * (n3 / sub_cols) + crd[1]; // отступ в extents = sub_cols * sizeof(double) 
         }
     }
 
-    MPI_Gatherv(sub_c->data, sendcount, MPI_DOUBLE,
-                c->data, recvcounts, displs, MPI_DOUBLE,
+    MPI_Gatherv(sub_c->data,      
+                sub_rows*sub_cols, 
+                MPI_DOUBLE,     
+                c->data,           
+                recvcounts,       
+                displs,           
+                block_type,    
                 0, grid->grid);
 
-    if (grid->rank == 0) {
+    if (rank == 0) {
         free(recvcounts);
         free(displs);
     }
+
+    MPI_Type_free(&block_type);
 }
+
 
 int main(int argc, char** argv) {
     GridInfo grid = {0};
@@ -220,47 +238,34 @@ int main(int argc, char** argv) {
     // Result collection
     gather_results(&grid, &sub_c, &c);
 
-    // Cleanup and output
-    if(grid.rank == 0) {
-        double end_time = MPI_Wtime();
-        printf("Execution time: %.4f seconds\n", end_time - start_time);
-        // print_matrix(&c);
+    double local_max_diff = 0.0;
 
-        int step = 25; 
-        double max_diff = 0.0;
-        int max_i = -1, max_j = -1;
+    for (int local_i = 0; local_i < sub_rows; ++local_i) {
+        int global_i = grid.coords[0] * sub_rows + local_i;
+        for (int local_j = 0; local_j < sub_cols; ++local_j) {
+            int global_j = grid.coords[1] * sub_cols + local_j;
 
-        for (int i = 0; i < n1; i += step) {
-            for (int j = 0; j < n3; j += step) {
+            double expected = 0.0;
+            for (int k = 0; k < n2; ++k) {
+                expected += (double)(global_i * n2 + k) * (double)(k * n3 + global_j);
+            }
 
-                double theoretical_C = 0.0;
-                for (int k = 0; k < n2; k++) {
-                    double a_ik = (double)(i * n2 + k); // A[i][k]
-                    double b_kj = (double)(k * n3 + j); // B[k][j]
-                    theoretical_C += a_ik * b_kj;
-                }
-
-
-                double computed_C = c.data[i * n3 + j];
-
-
-                double diff = fabs(theoretical_C - computed_C);
-
-
-                if (diff > max_diff) {
-                    max_diff = diff;
-                    max_i = i;
-                    max_j = j;
-                }
+            double computed = sub_c.data[local_i * sub_cols + local_j];
+            double diff = fabs(expected - computed);
+            if (diff > local_max_diff) {
+                local_max_diff = diff;
             }
         }
+    }
 
+    // Собираем глобальный максимум
+    double global_max_diff = 0.0;
+    MPI_Reduce(&local_max_diff, &global_max_diff, 1, MPI_DOUBLE, MPI_MAX, 0, MPI_COMM_WORLD);
 
-        printf("Maximum deviation: %.2e at (%d, %d)\n", max_diff, max_i, max_j);
-
-        free(a.data);
-        free(b.data);
-        free(c.data);
+    if (grid.rank == 0) {
+        double end_time = MPI_Wtime();
+        printf("Execution time: %.4f seconds\n", end_time - start_time);
+        printf("Maximum deviation: %.2e\n", global_max_diff);
     }
 
     free(sub_a.data);
